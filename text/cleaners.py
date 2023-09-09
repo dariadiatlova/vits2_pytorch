@@ -16,6 +16,9 @@ import re
 from unidecode import unidecode
 from phonemizer import phonemize
 
+from phonemizer.backend import EspeakBackend
+
+
 
 # Regular expression matching whitespace:
 _whitespace_re = re.compile(r"\s+")
@@ -108,3 +111,26 @@ def english_cleaners2(text):
     )
     phonemes = collapse_whitespace(phonemes)
     return phonemes
+
+
+def rus_cleaners(text):
+    """Pipeline for Russian text + punctuation + stress"""
+    # text = convert_to_ascii(text)
+    text = lowercase(text)
+    backend = EspeakBackend('ru', words_mismatch="ignore", preserve_punctuation=True, with_stress=True)
+    phonemes = backend.phonemize([text])[0]
+    # try:
+    #     phonemes = phonemize(
+    #         text,
+    #         language="r
+    #         backend="espeak",
+    #         strip=True,
+    #         preserve_punctuation=True,
+    #         with_stress=True,
+    #     )
+    # except OSError as e:
+    #     print(f"Skip phonemizing text: {text}")
+    #     return
+    phonemes = collapse_whitespace(phonemes)
+    return phonemes
+

@@ -5,9 +5,11 @@ import itertools
 import math
 import torch
 from torch import nn, optim
+from pathlib import Path
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
+import wandb
 
 # from tensorboardX import SummaryWriter
 import torch.multiprocessing as mp
@@ -39,8 +41,9 @@ def main():
     assert torch.cuda.is_available(), "CPU training is not allowed."
 
     n_gpus = torch.cuda.device_count()
+    print("GPUS Found ", n_gpus)
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "6060"
+    os.environ["MASTER_PORT"] = "12345"
 
     hps = utils.get_hparams()
     mp.spawn(
@@ -59,12 +62,14 @@ def run(rank, n_gpus, hps):
         logger = utils.get_logger(hps.model_dir)
         logger.info(hps)
         utils.check_git_hash(hps.model_dir)
-        writer = SummaryWriter(log_dir=hps.model_dir)
-        writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
+        Path(hps.wandb.dir).mkdir(exist_ok=True, parents=True)
+        wandb.init(project=hps.wandb.project, dir=hps.wandb.dir, resume=hps.wandb.resume)
+        # writer = SummaryWriter(log_dir=hps.model_dir)
+        # writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
 
     dist.init_process_group(
-        backend="nccl", init_method="env://", world_size=n_gpus, rank=rank
-    )
+        backend="nccl",  world_size=n_gpus, rank=rank
+    ) # init_method="env://",
     torch.manual_seed(hps.train.seed)
     torch.cuda.set_device(rank)
 
@@ -89,7 +94,7 @@ def run(rank, n_gpus, hps):
         rank=rank,
         shuffle=True,
     )
-
+    # print(f"Train Sampler Initialized")
     collate_fn = TextAudioCollate()
     train_loader = DataLoader(
         train_dataset,
@@ -110,6 +115,7 @@ def run(rank, n_gpus, hps):
             drop_last=False,
             collate_fn=collate_fn,
         )
+        # print(f"EVAL LOADER SIZE: {len(eval_loader)}")
     # some of these flags are not being used in the code and directly set in hps json file.
     # they are kept here for reference and prototyping.
 
@@ -194,6 +200,7 @@ def run(rank, n_gpus, hps):
         betas=hps.train.betas,
         eps=hps.train.eps,
     )
+
     if net_dur_disc is not None:
         optim_dur_disc = torch.optim.AdamW(
             net_dur_disc.parameters(),
@@ -254,7 +261,7 @@ def run(rank, n_gpus, hps):
                 scaler,
                 [train_loader, eval_loader],
                 logger,
-                [writer, writer_eval],
+                None, # [writer, writer_eval],
             )
         else:
             train_and_evaluate(
@@ -282,8 +289,8 @@ def train_and_evaluate(
     optim_g, optim_d, optim_dur_disc = optims
     scheduler_g, scheduler_d, scheduler_dur_disc = schedulers
     train_loader, eval_loader = loaders
-    if writers is not None:
-        writer, writer_eval = writers
+    # if writers is not None:
+    #     writer, writer_eval = writers
 
     train_loader.batch_sampler.set_epoch(epoch)
     global global_step
@@ -418,6 +425,7 @@ def train_and_evaluate(
         grad_norm_g = commons.clip_grad_value_(net_g.parameters(), None)
         scaler.step(optim_g)
         scaler.update()
+        torch.cuda.empty_cache()
 
         if rank == 0:
             if global_step % hps.train.log_interval == 0:
@@ -431,66 +439,69 @@ def train_and_evaluate(
                 logger.info([x.item() for x in losses] + [global_step, lr])
 
                 scalar_dict = {
-                    "loss/g/total": loss_gen_all,
-                    "loss/d/total": loss_disc_all,
+                    "loss/g_total": loss_gen_all,
+                    "loss/d_total": loss_disc_all,
                     "learning_rate": lr,
-                    "grad_norm_d": grad_norm_d,
-                    "grad_norm_g": grad_norm_g,
+                    "grad_norm/d": grad_norm_d,
+                    "grad_norm/g": grad_norm_g,
                 }
                 if net_dur_disc is not None:
                     scalar_dict.update(
                         {
-                            "loss/dur_disc/total": loss_dur_disc_all,
-                            "grad_norm_dur_disc": grad_norm_dur_disc,
+                            "loss/dur_disc_total": loss_dur_disc_all,
+                            "grad_norm/dur_disc": grad_norm_dur_disc,
                         }
                     )
                 scalar_dict.update(
                     {
-                        "loss/g/fm": loss_fm,
-                        "loss/g/mel": loss_mel,
-                        "loss/g/dur": loss_dur,
-                        "loss/g/kl": loss_kl,
+                        "loss/g_fm": loss_fm,
+                        "loss/g_mel": loss_mel,
+                        "loss/g_dur": loss_dur,
+                        "loss/g_kl": loss_kl,
                     }
                 )
 
-                scalar_dict.update(
-                    {"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)}
-                )
-                scalar_dict.update(
-                    {"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)}
-                )
-                scalar_dict.update(
-                    {"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)}
-                )
+                # scalar_dict.update(
+                #     {"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)}
+                # )
+                # scalar_dict.update(
+                #     {"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)}
+                # )
+                # scalar_dict.update(
+                #     {"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)}
+                # )
 
                 # if net_dur_disc is not None:
                 #   scalar_dict.update({"loss/dur_disc_r" : f"{losses_dur_disc_r}"})
                 #   scalar_dict.update({"loss/dur_disc_g" : f"{losses_dur_disc_g}"})
                 #   scalar_dict.update({"loss/dur_gen" : f"{loss_dur_gen}"})
 
-                image_dict = {
-                    "slice/mel_org": utils.plot_spectrogram_to_numpy(
-                        y_mel[0].data.cpu().numpy()
-                    ),
-                    "slice/mel_gen": utils.plot_spectrogram_to_numpy(
-                        y_hat_mel[0].data.cpu().numpy()
-                    ),
-                    "all/mel": utils.plot_spectrogram_to_numpy(
-                        mel[0].data.cpu().numpy()
-                    ),
-                    "all/attn": utils.plot_alignment_to_numpy(
-                        attn[0, 0].data.cpu().numpy()
-                    ),
-                }
-                utils.summarize(
-                    writer=writer,
-                    global_step=global_step,
-                    images=image_dict,
-                    scalars=scalar_dict,
-                )
+                for key, value in scalar_dict.items():
+                    wandb.log({key: value})
+
+                # image_dict = {
+                #     "slice/mel_org": utils.plot_spectrogram_to_numpy(
+                #         y_mel[0].data.cpu().numpy()
+                #     ),
+                #     "slice/mel_gen": utils.plot_spectrogram_to_numpy(
+                #         y_hat_mel[0].data.cpu().numpy()
+                #     ),
+                #     "all/mel": utils.plot_spectrogram_to_numpy(
+                #         mel[0].data.cpu().numpy()
+                #     ),
+                #     "all/attn": utils.plot_alignment_to_numpy(
+                #         attn[0, 0].data.cpu().numpy()
+                #     ),
+                # }
+                # utils.summarize(
+                #     writer=writer,
+                #     global_step=global_step,
+                #     images=image_dict,
+                #     scalars=scalar_dict,
+                # )
 
             if global_step % hps.train.eval_interval == 0:
-                evaluate(hps, net_g, eval_loader, writer_eval)
+                evaluate(hps, net_g, eval_loader), #writer_eval)
                 utils.save_checkpoint(
                     net_g,
                     optim_g,
@@ -519,7 +530,7 @@ def train_and_evaluate(
         logger.info("====> Epoch: {}".format(epoch))
 
 
-def evaluate(hps, generator, eval_loader, writer_eval):
+def evaluate(hps, generator, eval_loader): #, writer_eval):
     generator.eval()
     with torch.no_grad():
         for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths) in enumerate(
@@ -530,54 +541,73 @@ def evaluate(hps, generator, eval_loader, writer_eval):
             y, y_lengths = y.cuda(0), y_lengths.cuda(0)
 
             # remove else
-            x = x[:1]
-            x_lengths = x_lengths[:1]
-            spec = spec[:1]
-            spec_lengths = spec_lengths[:1]
-            y = y[:1]
-            y_lengths = y_lengths[:1]
-            break
+            # x = x[:1]
+            # x_lengths = x_lengths[:1]
+            # spec = spec[:1]
+            # spec_lengths = spec_lengths[:1]
+            # y = y[:1]
+            # y_lengths = y_lengths[:1]
+            # break
         y_hat, attn, mask, *_ = generator.module.infer(x, x_lengths, max_len=1000)
         y_hat_lengths = mask.sum([1, 2]).long() * hps.data.hop_length
 
-        if hps.model.use_mel_posterior_encoder or hps.data.use_mel_posterior_encoder:
-            mel = spec
-        else:
-            mel = spec_to_mel_torch(
-                spec,
-                hps.data.filter_length,
-                hps.data.n_mel_channels,
-                hps.data.sampling_rate,
-                hps.data.mel_fmin,
-                hps.data.mel_fmax,
-            )
-        y_hat_mel = mel_spectrogram_torch(
-            y_hat.squeeze(1).float(),
-            hps.data.filter_length,
-            hps.data.n_mel_channels,
-            hps.data.sampling_rate,
-            hps.data.hop_length,
-            hps.data.win_length,
-            hps.data.mel_fmin,
-            hps.data.mel_fmax,
+        # if hps.model.use_mel_posterior_encoder or hps.data.use_mel_posterior_encoder:
+        #     mel = spec
+        # else:
+        #     mel = spec_to_mel_torch(
+        #         spec,
+        #         hps.data.filter_length,
+        #         hps.data.n_mel_channels,
+        #         hps.data.sampling_rate,
+        #         hps.data.mel_fmin,
+        #         hps.data.mel_fmax,
+        #     )
+        # y_hat_mel = mel_spectrogram_torch(
+        #     y_hat.squeeze(1).float(),
+        #     hps.data.filter_length,
+        #     hps.data.n_mel_channels,
+        #     hps.data.sampling_rate,
+        #     hps.data.hop_length,
+        #     hps.data.win_length,
+        #     hps.data.mel_fmin,
+        #     hps.data.mel_fmax,
+        # )
+    # image_dict = {
+    #     "gen/mel": utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy())
+    # }
+    # audio_dict = {"gen/audio": y_hat[0, :, : y_hat_lengths[0]]}
+    # print("Y SHAPE", y_hat.shape)
+    for n in range(y_hat.shape[0]):
+        wandb.log(
+            {f"new_gen_audio/{batch_idx}_{n}": wandb.Audio(y_hat[n, :, : y_hat_lengths[n]].squeeze(0).detach().cpu().numpy(),
+                                                       caption=f"gen_audio/{batch_idx}_{n}",
+                                                       sample_rate=hps.data.sampling_rate
+                                                       )
+             },
         )
-    image_dict = {
-        "gen/mel": utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy())
-    }
-    audio_dict = {"gen/audio": y_hat[0, :, : y_hat_lengths[0]]}
-    if global_step == 0:
-        image_dict.update(
-            {"gt/mel": utils.plot_spectrogram_to_numpy(mel[0].cpu().numpy())}
-        )
-        audio_dict.update({"gt/audio": y[0, :, : y_lengths[0]]})
 
-    utils.summarize(
-        writer=writer_eval,
-        global_step=global_step,
-        images=image_dict,
-        audios=audio_dict,
-        audio_sampling_rate=hps.data.sampling_rate,
-    )
+    if global_step == 0:
+        # image_dict.update(
+        #     {"gt/mel": utils.plot_spectrogram_to_numpy(mel[0].cpu().numpy())}
+        # )
+        # audio_dict.update({"gt/audio": y[0, :, : y_lengths[0]]})
+        for n in range(y.shape[0]):
+            wandb.log(
+                {f"gt_audio/{batch_idx}_{n}": wandb.Audio(y[n, :, : y_lengths[n]].squeeze(0).detach().cpu().numpy(),
+                                                          caption=f"gt_audio/{batch_idx}_{n}",
+                                                          sample_rate=hps.data.sampling_rate
+                                                          )
+                 },
+            )
+
+    # utils.summarize(
+    #     writer=writer_eval,
+    #     global_step=global_step,
+    #     images=image_dict,
+    #     audios=audio_dict,
+    #     audio_sampling_rate=hps.data.sampling_rate,
+    # )
+    torch.cuda.empty_cache()
     generator.train()
 
 

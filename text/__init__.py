@@ -32,7 +32,14 @@ def cleaned_text_to_sequence(cleaned_text):
     Returns:
       List of integers corresponding to the symbols in the text
     """
-    sequence = [_symbol_to_id[symbol] for symbol in cleaned_text]
+    sequence = []
+    for symbol in cleaned_text:
+        try:
+            sequence.append(_symbol_to_id[symbol])
+        except KeyError:
+            print(f"Did not found phoneme: {symbol}")
+            print(f"All available phonemes: {_symbol_to_id}")
+    # sequence = [_symbol_to_id[symbol] for symbol in cleaned_text]
     return sequence
 
 

@@ -24,7 +24,9 @@ if __name__ == "__main__":
         for i in range(len(filepaths_and_text)):
             original_text = filepaths_and_text[i][args.text_index]
             cleaned_text = text._clean_text(original_text, args.text_cleaners)
-            filepaths_and_text[i][args.text_index] = cleaned_text
+            if cleaned_text is not None:
+                # skip strings that cannot be phonemized
+                filepaths_and_text[i][args.text_index] = cleaned_text
 
         new_filelist = filelist + "." + args.out_extension
         with open(new_filelist, "w", encoding="utf-8") as f:
