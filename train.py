@@ -579,7 +579,7 @@ def evaluate(hps, generator, eval_loader): #, writer_eval):
     # print("Y SHAPE", y_hat.shape)
     for n in range(y_hat.shape[0]):
         wandb.log(
-            {f"new_gen_audio/{batch_idx}_{n}": wandb.Audio(y_hat[n, :, : y_hat_lengths[n]].squeeze(0).detach().cpu().numpy(),
+            {f"v3_gen_audio/{batch_idx}_{n}": wandb.Audio(y_hat[n, :, : y_hat_lengths[n]].squeeze(0).detach().cpu().numpy(),
                                                        caption=f"gen_audio/{batch_idx}_{n}",
                                                        sample_rate=hps.data.sampling_rate
                                                        )
